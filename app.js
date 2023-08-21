@@ -163,7 +163,7 @@ async function uploadToDrive(file, folderId) {
     return response.data
 }
 
-app.post('/api/v2/registerEmployee_v2', upload.fields([{ name: 'profilePic' }, { name: 'identityProof' }]), async (req, res) => {
+app.post('/api/upload/registerEmployee_v2', upload.fields([{ name: 'profilePic' }, { name: 'identityProof' }]), async (req, res) => {
     try {
         console.log(req.body.name)
         let data = JSON.parse(JSON.stringify(req.body));
