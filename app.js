@@ -1,9 +1,32 @@
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+const dotenv = require('dotenv');
+dotenv.config()
+
 const express = require('express')
 require('express-async-errors')
 const app = express();
 const cors = require("cors")
 const multer = require('multer');
-const { google } = require('googleapis')
+const { google } = require('googleapis');
+
+
+const BUCKET_NAME = process.env.BUCKET_NAME
+const BUCKET_REGION = process.env.BUCKET_REGION
+const POLICY_NAME = process.env.POLICY_NAME
+
+const ACCESS_KEY = process.env.ACCESS_KEY
+const SECRET_ACCESS_KEY = process.env.SECRET_ACCESS_KEY
+
+
+const s3 = new S3Client({
+    credentials: {
+        accessKeyId: ACCESS_KEY,
+        secretAccessKey: SECRET_ACCESS_KEY
+    },
+    region: BUCKET_REGION
+})
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -41,89 +64,67 @@ const start = async () => {
     }
 }
 
+const storage = multer.memoryStorage()
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ storage: storage })
 const stream = require('stream');
 
 app.post('/api/upload/uploadFiles', upload.array('images'), async (req, res) => {
 
     try {
-        let folderId = '15BPdY4ps7wJNOXu9YeAVKlbjnlawnyHH'; // Replace with the ID of your target folder
-        let uploadedImages = [];
-        if (req.body) {
-            if (req.body.uploadType) {
-                if (['user_profile', 'user_identity'].indexOf(req.body.uploadType) > -1) {
-                    folderId = '1HBhN9kB13IeVsYBWeH5-xaz7Sdbh_pJ0';
-                }
-                console.log(uploadedImages)
-            }
+
+        let uploadedImages = []
+
+        // const file = req.file
+
+
+        console.log(req)
+
+        if (req?.files?.length > 0) {
             for (let index = 0; index < req.files.length; index++) {
-                const obj = await uploadToDrive(req.files[index], folderId)
-                    .then((response) => {
-                        return response;
-                    })
-                    .catch(err => {
-                        return res.status(200).json({
-                            status: "failed",
-                            msg: 'Failed to upload..! Try again later...!'
-                        });
-                    });
-
-                if (obj) {
-                    uploadedImages.push(obj)
-                }
-            }
-            if (req.body.uploadType === 'user_profile') {
-                if (uploadedImages[0].id) {
-
-                    let task = await reporterSchema.updateOne({ employeeId: req.body.employeeId }, {
-                        profilePicture: uploadedImages[0].id,
-                        identityVerificationStatus: "pending"
-                    })
-                    const userDataCopy = await reporterSchema.findOne({ employeeId: req.body.employeeId }).select('-password -__v -passwordCopy -_id')
-                    res.status(200).json({
-                        status: "success",
-                        msg: 'Profile Picture Updated Successfully...!',
-                        data: userDataCopy
-                    });
-                } else {
-                    res.status(200).json({
-                        status: "failed",
-                        msg: 'Failed to update profile picture..',
-
-                    });
+                const fileName = "FileNew" + new Date().getTime()+'_0';
+                const uploadParams = {
+                    Bucket: BUCKET_NAME,
+                    Body: req.files[index].buffer,
+                    Key: fileName,
+                    ContentType: req.files[index].mimetype
                 }
 
-            } else if (req.body.uploadType === 'user_identity') {
-                let task = await reporterSchema.updateOne({ employeeId: req.body.employeeId }, {
-                    identityProof: uploadedImages[0].id,
-                    identityVerificationStatus: "pending"
-
+                // Send the upload to S3
+                await s3.send(new PutObjectCommand(uploadParams));
+                const fileURLTemp = await getFileTempUrls3(fileName)
+                uploadedImages.push({
+                    fileName  : fileName,
+                    tempURL : fileURLTemp,
+                    ContentType: req.files[index].mimetype
                 })
-                const userDataCopy = await reporterSchema.findOne({ employeeId: req.body.employeeId }).select('-password -__v -passwordCopy -_id')
 
-                res.status(200).json({
-                    status: "success",
-                    msg: 'Identity Updated Successfully...!',
-                    data: userDataCopy
-                });
-            } else {
-                return res.status(200).json({
-                    status: "success",
-                    msg: 'Uploaded Succesfully.',
-                    data: uploadedImages
-                });
             }
         }
-    } catch (error) {
-        const obj = await errorLogBookSchema.create({
-            message: `Error while uploading files to drive`,
-            stackTrace: JSON.stringify([...error.stack].join('\n')),
-            page: (req.body && req.body.uploadType) ? req.body.uploadType + " uploading" : 'Uploading News Image',
-            functionality: (req.body && req.body.uploadType) ? req.body.uploadType + " uploading" : 'Uploading News Image',
-            errorMessage: `${JSON.stringify(error) || ''}`
-        })
+        console.log(uploadedImages)
+        // Configure the upload details to send to S3
 
+
+
+        // console.log(url)
+
+
+        res.status(200).json({
+            status: "SS",
+            msg: 'ss to while processing..',
+            data: uploadedImages
+
+        });
+    } catch (error) {
+        // const obj = await errorLogBookSchema.create({
+        //     message: `Error while uploading files to drive`,
+        //     stackTrace: JSON.stringify([...error.stack].join('\n')),
+        //     page: (req.body && req.body.uploadType) ? req.body.uploadType + " uploading" : 'Uploading News Image',
+        //     functionality: (req.body && req.body.uploadType) ? req.body.uploadType + " uploading" : 'Uploading News Image',
+        //     errorMessage: `${JSON.stringify(error) || ''}`
+        // })
+
+        console.error(error)
         res.status(200).json({
             status: "failed",
             msg: 'Failed to while processing..',
@@ -133,34 +134,60 @@ app.post('/api/upload/uploadFiles', upload.array('images'), async (req, res) => 
 
 });
 
+async function getFileTempUrls3(fileName) {
+    // GETTING IMAGE URL
+    const url = await getSignedUrl(
+        s3,
+        new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+
+            Key: fileName
+            // ContentType: file.mimetype
+        }),
+        { expiresIn: 3600 }// 60 seconds
+    );
+    return url
+}
+
 
 async function uploadToDrive(file, folderId) {
-    const credentials = require('./cred.json'); // Replace with your Google Drive API credentials
 
-    const auth = new google.auth.JWT(
-        credentials.client_email,
-        null,
-        credentials.private_key,
-        ['https://www.googleapis.com/auth/drive']
-    );
+    const params = {
+        Bucket: BUCKET_NAME,
+        Key: "FILE_" + new Date().getTime() + "_0",
+        Body: file,
+        // contentType:'jp'
+    }
+    const command = new PutObjectCommand(params)
 
-    const drive = google.drive({ version: 'v3', auth });
+    s3.send(command)
+    console.log("HII")
+    // const credentials = require('./cred.json'); // Replace with your Google Drive API credentials
 
-    const response = await drive.files.create({
-        requestBody: {
-            name: file.originalname,
-            mimeType: file.mimetype,
-            parents: [folderId], // Specify the folder ID where you want to upload the file
-        },
-        media: {
-            mimeType: file.mimetype,
-            body: fs.createReadStream(file.path),
-        },
-    });
+    // const auth = new google.auth.JWT(
+    //     credentials.client_email,
+    //     null,
+    //     credentials.private_key,
+    //     ['https://www.googleapis.com/auth/drive']
+    // );
 
-    fs.unlinkSync(file.path); // Remove the temporary file
+    // const drive = google.drive({ version: 'v3', auth });
+
+    // const response = await drive.files.create({
+    //     requestBody: {
+    //         name: file.originalname,
+    //         mimeType: file.mimetype,
+    //         parents: [folderId], // Specify the folder ID where you want to upload the file
+    //     },
+    //     media: {
+    //         mimeType: file.mimetype,
+    //         body: fs.createReadStream(file.path),
+    //     },
+    // });
+
+    // fs.unlinkSync(file.path); // Remove the temporary file
     //https://drive.google.com/uc?export=view&id=
-    return response.data
+    return response?.data || { key: "SUCCESS" }
 }
 
 app.post('/api/upload/registerEmployee_v2', upload.fields([{ name: 'profilePic' }, { name: 'identityProof' }]), async (req, res) => {
